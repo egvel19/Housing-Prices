@@ -16,33 +16,26 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from xgboost import XGBRegressor
 
 
-# Load Data
+#Load Data
 train_df = pd.read_csv('/kaggle/input/house-prices-advanced-regression-techniques/train.csv')
 test_df = pd.read_csv('/kaggle/input/house-prices-advanced-regression-techniques/test.csv')
 
-
-# Find and drop outliers
+# Outliers
 rows_to_drop = [598, 955, 935, 1299, 250, 314, 336, 707, 379, 1183, 692, 186, 441, 186, 524, 739, 598, 955, 636, 1062, 1191, 496, 198, 1338]
 train_df.drop(rows_to_drop, inplace=True)
 
-#Feature Engineering
-train_df['houseage'] = train_df['YrSold'] - train_df['YearBuilt']
-test_df['houseage'] = test_df['YrSold'] - test_df['YearBuilt']
+# Feature engineering function
+def engineer_features(df):
+    df['houseage'] = df['YrSold'] - df['YearBuilt']
+    df['houseremodelage'] = df['YrSold'] - df['YearRemodAdd']
+    df['totalsf'] = df['1stFlrSF'] + df['2ndFlrSF'] + df['BsmtFinSF1'] + df['BsmtFinSF2']
+    df['totalarea'] = df['GrLivArea'] + df['TotalBsmtSF']
+    df['totalbaths'] = df['BsmtFullBath'] + df['FullBath'] + 0.5 * (df['BsmtHalfBath'] + df['HalfBath']) 
+    df['totalporchsf'] = df['OpenPorchSF'] + df['3SsnPorch'] + df['EnclosedPorch'] + df['ScreenPorch'] + df['WoodDeckSF']
 
-train_df['houseremodelage'] = train_df['YrSold'] - train_df['YearRemodAdd']
-test_df['houseremodelage'] = test_df['YrSold'] - test_df['YearRemodAdd']
-
-train_df['totalsf'] = train_df['1stFlrSF'] + train_df['2ndFlrSF'] + train_df['BsmtFinSF1'] + train_df['BsmtFinSF2']
-test_df['totalsf'] = test_df['1stFlrSF'] + test_df['2ndFlrSF'] + test_df['BsmtFinSF1'] + test_df['BsmtFinSF2']
-
-train_df['totalarea'] = train_df['GrLivArea'] + train_df['TotalBsmtSF']
-test_df['totalarea'] = test_df['GrLivArea'] + test_df['TotalBsmtSF']
-
-train_df['totalbaths'] = train_df['BsmtFullBath'] + train_df['FullBath'] + 0.5 * (train_df['BsmtHalfBath'] + train_df['HalfBath']) 
-test_df['totalbaths'] = test_df['BsmtFullBath'] + test_df['FullBath'] + 0.5 * (test_df['BsmtHalfBath'] + test_df['HalfBath']) 
-
-train_df['totalporchsf'] = train_df['OpenPorchSF'] + train_df['3SsnPorch'] + train_df['EnclosedPorch'] + train_df['ScreenPorch'] + train_df['WoodDeckSF']
-test_df['totalporchsf'] = test_df['OpenPorchSF'] + test_df['3SsnPorch'] + test_df['EnclosedPorch'] + test_df['ScreenPorch'] + test_df['WoodDeckSF']
+# Feature engineering for test and training data
+engineer_features(train_df)
+engineer_features(test_df)
 
 # prepare numerical and categorical data to process 
 num_cols = train_df.select_dtypes(include=['int64', 'float64']).columns
@@ -50,7 +43,7 @@ num_cols = num_cols.drop('SalePrice')
 
 cat_cols = train_df.select_dtypes(include=['object']).columns
 
-# Prepare pipelines
+# Define pipelines
 num_pipeline = Pipeline(steps=[
     ('impute', SimpleImputer(strategy='mean')),
     ('scaler', StandardScaler())
@@ -58,10 +51,10 @@ num_pipeline = Pipeline(steps=[
 
 cat_pipeline = Pipeline(steps=[
     ('impute', SimpleImputer(strategy='most_frequent')),
-    ('encoder', OneHotEncoder())
+    ('encoder', OneHotEncoder(handle_unknown='ignore'))
 ])
 
-# Column transformer
+# column transformer
 col_trans = ColumnTransformer(transformers=[
     ('num_p', num_pipeline, num_cols),
     ('cat_p', cat_pipeline, cat_cols),
@@ -69,30 +62,23 @@ col_trans = ColumnTransformer(transformers=[
 remainder='passthrough', 
 n_jobs=-1)
 
-# preprocessing
-pipeline = Pipeline(steps=[
-    ('preprocessing', col_trans)
-])
-
-# define data to use for fitting
+# Prepare data, transform and split
 X = train_df.drop('SalePrice', axis=1)
 y = train_df['SalePrice']
+X_preprocessed = col_trans.fit_transform(X)
+X_preprocessed_test = col_trans.transform(test_df)
 
-# process data using pipeline
-X_preprocessed = pipeline.fit_transform(X)
-
-# split data 
 X_train, X_test, y_train, y_test = train_test_split(X_preprocessed, y, test_size=0.4, random_state=0)
 
-# Build linear model
+# Linear Regression
 lr = LinearRegression()
 lr.fit(X_train, y_train)
 lr_pred = lr.predict(X_test)
-mea = mean_squared_error(y_test, lr_pred)
-print(mea)
+lr_mse = mean_squared_error(y_test, lr_pred)
+print("Linear Regression MSE:", lr_mse)
 
-# XGB Regressor
-XGB = XGBRegressor(random_state=0)
+#XGBoost
+XGB = XGBRegressor(random_state=13)
 param_grid_XGB = {
     'learning_rate': [0.05, 0.1, 0.2],
     'n_estimators': [300],
@@ -102,6 +88,20 @@ param_grid_XGB = {
     'subsample': [0.8, 0.9, 1.0],
     'colsample_bytree': [0.8, 0.9, 1.0],
 }
+
 xgb_cv = GridSearchCV(XGB, param_grid_XGB, cv=3, scoring='neg_mean_squared_error', n_jobs=-1)
 xgb_cv.fit(X_train, y_train)
-np.sqrt(-1 * xgb_cv.best_score_)
+# np.sqrt(-1 * xgb_cv.best_score_)
+best_xgb_model = xgb_cv.best_estimator_
+xgb_pred = best_xgb_model.predict(X_test)
+xgb_mse = mean_squared_error(y_test, xgb_pred)
+print("XGBoost MSE:", xgb_mse)
+
+# Predict for test data and prepare submission
+y_test_pred = best_xgb_model.predict(X_preprocessed_test)
+submission_df = pd.DataFrame({
+    'Id': test_df['Id'],
+    'SalePrice': y_test_pred
+})
+
+submission_df.to_csv('submission.csv', index = False)
